@@ -1,0 +1,726 @@
+// Dar-Ul-Kutub Database Schema
+// Islamic Book Repository & Marketplace
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USERS & AUTHENTICATION (Admin & Vendor only)
+// ============================================================================
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  phone        String?    @unique
+  passwordHash String
+  role         UserRole   @default(VENDOR)
+  status       UserStatus @default(ACTIVE)
+
+  // Relations
+  vendor   Vendor?
+  sessions Session[]
+  accounts Account[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  @@index([email])
+  @@index([role, status])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  VENDOR
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+// NextAuth.js tables
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ============================================================================
+// VENDOR ONBOARDING
+// ============================================================================
+
+model VendorInvite {
+  id        String       @id @default(uuid())
+  email     String
+  token     String       @unique @default(uuid())
+  status    InviteStatus @default(PENDING)
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+
+  invitedBy String // Admin user ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([token])
+  @@index([email, status])
+  @@index([expiresAt])
+  @@map("vendor_invites")
+}
+
+enum InviteStatus {
+  PENDING
+  USED
+  EXPIRED
+  REVOKED
+}
+
+model Vendor {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  businessName String
+  businessType VendorType
+  description  String?    @db.Text
+
+  // Contact
+  contactName  String
+  contactEmail String
+  contactPhone String
+
+  // Address (ships from)
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String // US state code (2-letter)
+  zipCode      String
+  country      String  @default("US")
+
+  // Stripe Connect
+  stripeAccountId String?  @unique
+  stripeOnboarded Boolean  @default(false)
+
+  // Settings
+  commissionRate Decimal @default(0.15) @db.Decimal(5, 4) // Platform fee (0.15 = 15%)
+  autoApprove    Boolean @default(false) // Auto-approve listings
+
+  status     VendorStatus @default(PENDING_REVIEW)
+  approvedAt DateTime?
+  approvedBy String? // Admin user ID
+
+  // Relations
+  products   Product[]
+  orderItems OrderItem[]
+  payouts    Payout[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([stripeAccountId])
+  @@map("vendors")
+}
+
+enum VendorType {
+  BOOKSTORE
+  MASJID
+  PUBLISHER
+  ORGANIZATION
+  INDIVIDUAL
+}
+
+enum VendorStatus {
+  PENDING_REVIEW
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+// ============================================================================
+// PRODUCTS (Book Listings)
+// ============================================================================
+
+model Product {
+  id       String @id @default(uuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+
+  // Book Info
+  title       String
+  subtitle    String?
+  authors     String[] // Array of author names
+  publisher   String?
+  publishYear Int?
+  edition     String?
+  language    String   @default("en")
+  isbn10      String?
+  isbn13      String?
+
+  // Physical Details
+  binding   BindingType
+  condition BookCondition @default(NEW)
+  pageCount Int?
+
+  // Shipping (required for rate calculation)
+  weightOz Decimal @db.Decimal(8, 2) // Weight in ounces
+  lengthIn Decimal @db.Decimal(6, 2) // Length in inches
+  widthIn  Decimal @db.Decimal(6, 2)
+  heightIn Decimal @db.Decimal(6, 2)
+
+  // Pricing & Inventory
+  price             Decimal  @db.Decimal(10, 2)
+  compareAtPrice    Decimal? @db.Decimal(10, 2) // Original price if on sale
+  cost              Decimal? @db.Decimal(10, 2) // Vendor's cost (private)
+  stock             Int      @default(0)
+  lowStockThreshold Int      @default(5)
+
+  // Content
+  description     String  @db.Text
+  tableOfContents String? @db.Text
+  images          String[] // Array of image URLs
+
+  // Categorization
+  topics         String[] // General topic tags
+  subjects       String[] // Islamic subjects (Fiqh, Aqeedah, Hadith, Tafsir, etc.)
+  targetAudience String[] // Kids, Scholars, General, Students, etc.
+
+  // Status & Approval
+  status         ProductStatus @default(DRAFT)
+  approvedAt     DateTime?
+  approvedBy     String? // Admin user ID
+  rejectedReason String?
+
+  // SEO
+  slug            String  @unique
+  metaDescription String?
+
+  // Stats
+  viewCount  Int @default(0)
+  orderCount Int @default(0)
+
+  // Relations
+  orderItems OrderItem[]
+  reviews    Review[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([slug])
+  @@index([title])
+  @@index([price])
+  @@index([stock])
+  @@index([isbn10])
+  @@index([isbn13])
+  @@map("products")
+}
+
+enum BindingType {
+  HARDCOVER
+  PAPERBACK
+  LEATHER
+  SPIRAL
+}
+
+enum BookCondition {
+  NEW
+  LIKE_NEW
+  VERY_GOOD
+  GOOD
+  ACCEPTABLE
+}
+
+enum ProductStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+// ============================================================================
+// ORDERS (Guest Checkout)
+// ============================================================================
+
+model Order {
+  id          String @id @default(uuid())
+  orderNumber String @unique // Human-readable: ORD-20250127-ABCD
+
+  // Guest Info (no buyer account)
+  guestEmail String
+  guestPhone String?
+
+  // Shipping Address
+  shippingName    String
+  shippingLine1   String
+  shippingLine2   String?
+  shippingCity    String
+  shippingState   String
+  shippingZip     String
+  shippingCountry String  @default("US")
+
+  // Billing Address (same as shipping for MVP)
+  billingName    String
+  billingLine1   String
+  billingLine2   String?
+  billingCity    String
+  billingState   String
+  billingZip     String
+  billingCountry String  @default("US")
+
+  // Pricing
+  subtotal     Decimal @db.Decimal(10, 2)
+  shippingCost Decimal @db.Decimal(10, 2)
+  taxAmount    Decimal @db.Decimal(10, 2)
+  totalAmount  Decimal @db.Decimal(10, 2)
+
+  // Status
+  status            OrderStatus       @default(PENDING)
+  paymentStatus     PaymentStatus     @default(PENDING)
+  fulfillmentStatus FulfillmentStatus @default(UNFULFILLED)
+
+  // Stripe
+  stripePaymentIntentId String? @unique
+
+  // Relations
+  items      OrderItem[]
+  payments   Payment[]
+  shipments  Shipment[]
+  magicLinks MagicLink[]
+  refunds    Refund[]
+
+  // Notes
+  customerNote String? @db.Text
+  internalNote String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderNumber])
+  @@index([guestEmail])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+}
+
+enum FulfillmentStatus {
+  UNFULFILLED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  RETURNED
+}
+
+model OrderItem {
+  id        String @id @default(uuid())
+  orderId   String
+  order     Order  @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  vendorId  String
+  vendor    Vendor  @relation(fields: [vendorId], references: [id])
+
+  // Snapshot at time of order
+  title    String
+  price    Decimal @db.Decimal(10, 2)
+  quantity Int
+
+  // Vendor revenue split
+  vendorAmount    Decimal @db.Decimal(10, 2)
+  platformFee     Decimal @db.Decimal(10, 2)
+  platformFeeRate Decimal @db.Decimal(5, 4)
+
+  status OrderItemStatus @default(PENDING)
+
+  // Shipping
+  shipmentId String?
+  shipment   Shipment? @relation(fields: [shipmentId], references: [id])
+
+  // Review
+  review Review?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([vendorId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+enum OrderItemStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  RETURNED
+  REFUNDED
+}
+
+// ============================================================================
+// PAYMENTS
+// ============================================================================
+
+model Payment {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("usd")
+
+  stripePaymentIntentId String  @unique
+  stripeChargeId        String? @unique
+
+  status PaymentStatus @default(PENDING)
+
+  // Idempotency
+  idempotencyKey String @unique
+
+  // Metadata
+  paymentMethod String? // card, apple_pay, google_pay
+  last4         String?
+  brand         String?
+
+  failureCode    String?
+  failureMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([stripePaymentIntentId])
+  @@map("payments")
+}
+
+// ============================================================================
+// SHIPPING
+// ============================================================================
+
+model Shipment {
+  id       String @id @default(uuid())
+  orderId  String
+  order    Order  @relation(fields: [orderId], references: [id])
+  vendorId String // Which vendor is shipping
+
+  // Shippo
+  shippoRateId        String?
+  shippoTransactionId String? @unique
+
+  carrier        String  // USPS, UPS, FedEx
+  service        String  // Priority Mail, Ground, etc.
+  trackingNumber String? @unique
+  trackingUrl    String?
+
+  labelUrl String? // PDF label
+
+  // Costs
+  shippingCost Decimal @db.Decimal(10, 2)
+
+  // Status
+  status ShipmentStatus @default(LABEL_CREATED)
+
+  // Tracking events (JSON)
+  trackingEvents Json?
+
+  // Dates
+  shippedAt         DateTime?
+  estimatedDelivery DateTime?
+  deliveredAt       DateTime?
+
+  // Relations
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([trackingNumber])
+  @@index([status])
+  @@map("shipments")
+}
+
+enum ShipmentStatus {
+  LABEL_CREATED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+// ============================================================================
+// MAGIC LINKS (Guest Order Access)
+// ============================================================================
+
+model MagicLink {
+  id      String @id @default(uuid())
+  token   String @unique @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+  email   String // Must match order email
+
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  // Rotation: generate new token on each use for security
+  rotated Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([orderId])
+  @@index([expiresAt])
+  @@map("magic_links")
+}
+
+// ============================================================================
+// REVIEWS
+// ============================================================================
+
+model Review {
+  id          String    @id @default(uuid())
+  orderItemId String    @unique // One review per line item
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id])
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+
+  rating  Int     // 1-5 stars
+  title   String?
+  comment String? @db.Text
+
+  // Guest info (from order)
+  reviewerName  String // Can be "Anonymous" or real name
+  reviewerEmail String // For verification, not displayed
+
+  verified Boolean @default(true) // Always true for MVP (verified purchases)
+
+  // Moderation
+  status         ReviewStatus @default(PENDING)
+  moderatedBy    String? // Admin user ID
+  moderatedAt    DateTime?
+  rejectedReason String?
+
+  // Helpful votes (future)
+  helpfulCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("reviews")
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ============================================================================
+// REFUNDS
+// ============================================================================
+
+model Refund {
+  id      String       @id @default(uuid())
+  orderId String
+  order   Order        @relation(fields: [orderId], references: [id])
+  amount  Decimal      @db.Decimal(10, 2)
+  reason  RefundReason
+  reasonNote String?   @db.Text
+
+  // Stripe
+  stripeRefundId String @unique
+
+  status RefundStatus @default(PENDING)
+
+  // Who initiated
+  initiatedBy String // Admin or Vendor user ID
+
+  // Inventory
+  restockItems Boolean @default(true)
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([orderId])
+  @@index([status])
+  @@map("refunds")
+}
+
+enum RefundReason {
+  CUSTOMER_REQUEST
+  OUT_OF_STOCK
+  DAMAGED
+  WRONG_ITEM
+  DUPLICATE_ORDER
+  FRAUDULENT
+  OTHER
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================================
+// PAYOUTS (Vendor Payments via Stripe Connect)
+// ============================================================================
+
+model Payout {
+  id       String @id @default(uuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("usd")
+
+  // Stripe Connect
+  stripePayoutId  String? @unique
+  stripeAccountId String
+
+  status PayoutStatus @default(PENDING)
+
+  // Date range of orders included
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Details
+  orderCount  Int
+  platformFee Decimal @db.Decimal(10, 2)
+  grossAmount Decimal @db.Decimal(10, 2) // Before platform fee
+
+  failureCode    String?
+  failureMessage String?
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("payouts")
+}
+
+enum PayoutStatus {
+  PENDING
+  IN_TRANSIT
+  PAID
+  FAILED
+  CANCELLED
+}
+
+// ============================================================================
+// AUDIT LOGS
+// ============================================================================
+
+model AuditLog {
+  id       String   @id @default(uuid())
+  userId   String // Who performed the action
+  userRole UserRole
+
+  action   String // VENDOR_INVITED, LISTING_APPROVED, etc.
+  entity   String // vendors, products, orders, etc.
+  entityId String // ID of affected record
+
+  changes  Json? // Before/after snapshot
+  metadata Json? // Additional context
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// CMS (Simple content management for legal pages)
+// ============================================================================
+
+model CmsPage {
+  id        String  @id @default(uuid())
+  slug      String  @unique
+  title     String
+  content   String  @db.Text
+  published Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  updatedBy String // Admin user ID
+
+  @@index([slug])
+  @@map("cms_pages")
+}
