@@ -1,0 +1,27 @@
+import { hash } from 'bcrypt'
+
+const SALT_ROUNDS = 10
+
+export async function hashPassword(password: string): Promise<string> {
+  return await hash(password, SALT_ROUNDS)
+}
+
+export function validatePassword(password: string): { valid: boolean; error?: string } {
+  if (password.length < 8) {
+    return { valid: false, error: 'Password must be at least 8 characters' }
+  }
+
+  if (!/[a-z]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one lowercase letter' }
+  }
+
+  if (!/[A-Z]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one uppercase letter' }
+  }
+
+  if (!/[0-9]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one number' }
+  }
+
+  return { valid: true }
+}

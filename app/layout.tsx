@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter, Amiri } from 'next/font/google'
 import './globals.css'
+import { SessionProvider } from '@/components/providers/session-provider'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 const amiri = Amiri({
@@ -23,7 +24,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${amiri.variable} font-sans antialiased`}>
-        {children}
+        <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
   )

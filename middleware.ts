@@ -1,41 +1,57 @@
+import { auth } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
 
-export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl
+export default auth((req) => {
+  const { pathname } = req.nextUrl
+  const isLoggedIn = !!req.auth
+  const userRole = req.auth?.user?.role
 
-  // Admin routes - require ADMIN role
+  // Public routes that don't require auth
+  const isPublicRoute =
+    pathname === '/' ||
+    pathname.startsWith('/books') ||
+    pathname.startsWith('/cart') ||
+    pathname.startsWith('/checkout') ||
+    pathname.startsWith('/order/') ||
+    pathname.startsWith('/auth/') ||
+    pathname.startsWith('/api/auth/')
+
+  // Admin routes
   if (pathname.startsWith('/admin')) {
-    // TODO: Check auth session and role
-    // For now, allow through (will implement with NextAuth)
-    return NextResponse.next()
+    if (!isLoggedIn) {
+      return NextResponse.redirect(new URL('/auth/login?callbackUrl=/admin', req.url))
+    }
+    if (userRole !== 'ADMIN') {
+      return NextResponse.redirect(new URL('/auth/unauthorized', req.url))
+    }
   }
 
-  // Vendor routes - require VENDOR or ADMIN role
+  // Vendor routes
   if (pathname.startsWith('/vendor')) {
-    // TODO: Check auth session and role
-    return NextResponse.next()
+    if (!isLoggedIn) {
+      return NextResponse.redirect(new URL('/auth/login?callbackUrl=/vendor', req.url))
+    }
+    if (userRole !== 'VENDOR' && userRole !== 'ADMIN') {
+      return NextResponse.redirect(new URL('/auth/unauthorized', req.url))
+    }
   }
 
-  // API routes - handle auth in individual routes
+  // API routes
   if (pathname.startsWith('/api/admin')) {
-    // TODO: Check API auth and role
-    return NextResponse.next()
+    if (!isLoggedIn || userRole !== 'ADMIN') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
 
   if (pathname.startsWith('/api/vendor')) {
-    // TODO: Check API auth and role
-    return NextResponse.next()
+    if (!isLoggedIn || (userRole !== 'VENDOR' && userRole !== 'ADMIN')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
 
   return NextResponse.next()
-}
+})
 
 export const config = {
-  matcher: [
-    '/admin/:path*',
-    '/vendor/:path*',
-    '/api/admin/:path*',
-    '/api/vendor/:path*',
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 }
